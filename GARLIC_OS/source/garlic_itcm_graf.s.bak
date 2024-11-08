@@ -1,0 +1,216 @@
+﻿@;==============================================================================
+@;
+@;	"garlic_itcm_graf.s":	código de rutinas de soporte a la gestión de
+@;							ventanas gráficas (versión 1.0)
+@;
+@;==============================================================================
+
+NVENT	= 16					@; número de ventanas totales
+PPART	= 4					@; número de ventanas horizontales o verticales
+							@; (particiones de pantalla)
+L2_PPART = 2				@; log base 2 de PPART
+
+VCOLS	= 32				@; columnas y filas de cualquier ventana
+VFILS	= 24
+PCOLS	= VCOLS * PPART		@; número de columnas totales (en pantalla)
+PFILS	= VFILS * PPART		@; número de filas totales (en pantalla)
+
+WBUFS_LEN = 68				@; longitud de cada buffer de ventana (324)
+
+.section .itcm,"ax",%progbits
+
+	.arm
+	.align 2
+
+
+	.global _gg_escribirLinea
+	@; Rutina para escribir toda una linea de caracteres almacenada en el
+	@; buffer de la ventana especificada;
+	@;Parámetros:
+	@;	R0: ventana a actualizar (int v)
+	@;	R1: fila actual (int f)
+	@;	R2: número de caracteres a escribir (int n)
+_gg_escribirLinea:
+	push {r3-r7, lr}
+
+	@;COLUMNA --> (v % ppart) * VCOLS
+	mov r3, #PPART		@; r4 = PPART
+	sub r3, r3, #1		@; PPART-
+	and r4, r0, r3		@; r4 = r0 and r4 (v and PPART-1)
+	mov r3, #VCOLS		@; r3 = VCOLS
+	mul r5, r3, r4		@; r5= (v % ppart) * VCOLS
+	
+	@;FILA --> (v / ppart) * PCOLS * VFILS
+	mov r3, #L2_PPART	@; r3 = L2_PPART
+	lsr r4, r0, r3		@; r6 = ( v / PPART), shif right de 1 o 2 bits, depende de fase
+	mov r3, #PCOLS		@; r3 = PCOLS
+	mul r6, r3, r4		@; r6 = PCOLS * ( v / PPART)
+	
+	mov r7, #VFILS		@; r7 = VFILS
+	@; DESPLAZAMIENTO DE FILAS  COLUMNAS
+	mla r4, r6, r7, r5	@; r4 = (PCOLS * ( v / PPART) * VFILS)  ((v % ppart) * VCOLS)
+		
+	@; desplazamiento de fila act  despl. total
+	mla r5, r1, r3, r4 @; r5 = (filaACt * PCOLS)  (PCOLS * ( v / PPART) * VFILS)  ((v % ppart) * VCOLS)
+	lsl r5, #1				@; Baldosas son 2 bytes, halfword, mulitplicamos por dos la dirección
+	
+	@; dir ini bg 2  despl. total
+	ldr r4, =bg2MapDir		@; variable con la dirección del fondo 2
+	ldr r4, [r4]			@; valor de la variable a r4
+	
+	add r4, r5				@; r4 = DirIniBg2  Desplazamiento total
+	
+	@; cogemos vector _gd_wbfs
+	ldr r5, =_gd_wbfs		@; r5 = @_gd_wbfs
+	mov r6, #WBUFS_LEN		@; vector de 324 del buffer de v
+	mul r3,r6, r0				@; r6 = WBUFS_LEN * v --> nos colocamos en el buffer correcto
+	
+	add r5, r3				@; r5 = @_dg_wbfs  (WBUFS_LEN * v)
+	add r5, #4				@; primeros 4 bytes son p control, accedimos a pChars
+	
+	mov r6, #0				@; iterador para bucle (i)
+.LWhile:
+	ldrb r3, [r5, r6]		@; r3 = _gd_wbfs[v].pChars[i]
+	sub r3, #32				@; restar a ASCII 32, obtenemos codigo baldosa
+	strh r3, [r4]			@; Guardamos codigo baldosa al fondo (2 bytes, halfword)
+	add r4, #2				@; Sumamos 2 bytes para la siguiente posición
+	add r6, #1				@; i;
+	cmp r6, r2				@; Comparar i < charCount
+	blo .LWhile				@; Si cierto volvemos al bucle	
+
+	pop {r3-r7, pc}
+	
+	
+	
+	.global _gg_desplazar
+	@; Rutina para desplazar una posición hacia arriba todas las filas de la
+	@; ventana (v), y borrar el contenido de la última fila
+	@;Parámetros:
+	@;	R0: ventana a desplazar (int v)
+_gg_desplazar:
+	push {r1-r7, lr}
+	
+	@;COLUMNA --> (v % ppart) * VCOLS
+	mov r3, #PPART		@; r4 = PPART
+	sub r3, r3, #1		@; PPART-
+	and r4, r0, r3		@; r4 = r0 and r4 (v and PPART-1)
+	mov r3, #VCOLS		@; r3 = VCOLS
+	mul r5, r3, r4		@; r5= (v % ppart) * VCOLS
+	
+	@;FILA --> (v / ppart) * PCOLS * VFILS
+	mov r3, #L2_PPART	@; r3 = L2_PPART
+	lsr r4, r0, r3		@; r6 = ( v / PPART), shif right de 1 o 2 bits, depende de fase
+	mov r3, #PCOLS		@; r3 = PCOLS
+	mul r6, r3, r4		@; r6 = PCOLS * ( v / PPART)
+	
+	mov r7, #VFILS		@; r7 = VFILS
+	@; DESPLAZAMIENTO DE FILAS  COLUMNAS
+	mla r3, r6, r7, r5	@; r4 = (PCOLS * ( v / PPART) * VFILS)  ((v % ppart) * VCOLS)
+	lsl r3, #1			@; Baldosas son halfwords, multiplicamos por dos (bytes) el desplazamiento de mapa	
+	
+	@; dir ini bg 2  despl. total	
+	ldr r1, =bg2MapDir		@; Dirección que contiene @bg2MapDir
+	ldr r1, [r1]			@; valor de bgMapDir
+	add r1, r3				@; r1 = bg2MapDir  Desplaamiento de v
+	
+	@; desplazar cada fila una posición hacia arriba
+	@; dos registros con la fila actual y uno con la siguiente
+	@; bucle para recorrer la siguiente y colocar sus posiciones a la actual
+	@; una vez VCOLS == 0, pasamos a la siguiente fila
+	@; una vez VFILS == 0, borramos la ultima linea
+	
+	
+	mov r2, r1				@; r2 = desplazamiento en mem.
+	mov r3, #PCOLS			@; r3 = PCOLS
+	lsl r3, #1				@; Baldosas son halfwords, 2 bytes, pcols * 2
+	mov r4, #VFILS			@; r4 = VFILS
+	add r2, r3				@; r2 = desplazamiento para obtener la siguiente fila
+	
+.LWhile1:					@; Primer bucle para todas las filas
+	mov r5, #VCOLS			@; r5 = VCOLS, nos sirve como iterador del bucle
+	mov r6, #0				@; r6 = desplazador para r1/r2
+.LWhile2:					@; Segundo bucle para recorrer toda una fila y desplazar sus columnas una posición arriba
+	ldrh r7, [r2, r6]		@; r7 = siguiente fila cogemos columna r6
+	strh r7, [r1, r6]		@; store de r7 en la fila actual en su columna correspondiente
+	add r6, #2				@; r6 = r6  2, ya que baldosa es halfword
+	sub r5, #1				@; vcols--
+	cmp r5, #0				@; comparamos vcols con 0
+	bhi .LWhile2			@; mientras r5 > 0, saltamos
+	
+	sub r4, #1				@; vfils--
+	add r1, r3				@; pasamos a la siguiente fila
+	add r2, r3					
+	cmp r4, #0				@; comparamos vfils con 0
+	bhi .LWhile1			@; si r4 > 0, saltamos a .LWhile1 para nueva fila a desplazar
+	
+	sub r1, r3				@; hemos llegado a ultima fila, r1 = r1 - pcols ya que hemos avanzado 1 de mas
+	mov r2, #0				@; r3 = baldosa 0, en negro
+	mov r3, #0				@; desplazamiento para las baldosas
+	mov r4, #VCOLS			@; r4 = VCOLS
+	
+.LWhile3:
+	strh r2, [r1, r3]		@; store del halword
+	add r3, #2				@; desplazador  2
+	sub r4, #1				@; vcols--
+	cmp r4, #0				@; comprar vcols con 0
+	bhi .LWhile3			@; si vcols > 0, saltamos a Lwhile3
+
+	pop {r1-r7, pc}
+
+	.global _gg_escribirLineaTabla
+	@; escribe los campos bÃ¡sicos de una linea de la tabla correspondiente al
+	@; zÃ³calo indicado por parÃ¡metro con el color especificado; los campos
+	@; son: nÃºmero de zÃ³calo, PID, keyName y direcciÃ³n inicial
+	@;ParÃ¡metros:
+	@;	R0 (z)		->	nÃºmero de zÃ³calo
+	@;	R1 (color)	->	nÃºmero de color (de 0 a 3)
+_gg_escribirLineaTabla:
+	push {lr}
+
+
+	pop {pc}
+
+
+	.global _gg_escribirCar
+	@; escribe un carÃ¡cter (baldosa) en la posiciÃ³n de la ventana indicada,
+	@; con un color concreto;
+	@;ParÃ¡metros:
+	@;	R0 (vx)		->	coordenada x de ventana (0..31)
+	@;	R1 (vy)		->	coordenada y de ventana (0..23)
+	@;	R2 (car)	->	cÃ³digo del carÃ cter, como nÃºmero de baldosa (0..127)
+	@;	R3 (color)	->	nÃºmero de color del texto (de 0 a 3)
+	@; pila (vent)	->	nÃºmero de ventana (de 0 a 15)
+_gg_escribirCar:
+	push {lr}
+
+
+	pop {pc}
+
+
+	.global _gg_escribirMat
+	@; escribe una matriz de 8x8 carÃ¡cteres a partir de una posiciÃ³n de la
+	@; ventana indicada, con un color concreto;
+	@;ParÃ¡metros:
+	@;	R0 (vx)		->	coordenada x inicial de ventana (0..31)
+	@;	R1 (vy)		->	coordenada y inicial de ventana (0..23)
+	@;	R2 (m)		->	puntero a matriz 8x8 de cÃ³digos ASCII (direcciÃ³n)
+	@;	R3 (color)	->	nÃºmero de color del texto (de 0 a 3)
+	@; pila	(vent)	->	nÃºmero de ventana (de 0 a 15)
+_gg_escribirMat:
+	push {lr}
+
+
+	pop {pc}
+
+
+
+	.global _gg_rsiTIMER2
+	@; Rutina de Servicio de InterrupciÃ³n (RSI) para actualizar la representa-
+	@; ciÃ³n del PC actual.
+_gg_rsiTIMER2:
+	push {lr}
+
+
+	pop {pc}
+.end
+
